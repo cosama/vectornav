@@ -53,29 +53,59 @@ std::string frame_id;
 int main(int argc, char *argv[])
 {
 
-  // ROS node init
-  ros::init(argc, argv, "vectornav");
-  ros::NodeHandle n;
-  pubIMU = n.advertise<sensor_msgs::Imu>("vectornav/IMU", 1000);
-  pubMag = n.advertise<sensor_msgs::MagneticField>("vectornav/Mag", 1000);
-  pubGPS = n.advertise<sensor_msgs::NavSatFix>("vectornav/GPS", 1000);
-  pubTemp = n.advertise<sensor_msgs::Temperature>("vectornav/Temp", 1000);
-  pubPres = n.advertise<sensor_msgs::FluidPressure>("vectornav/Pres", 1000);
-
-  n.param<std::string>("frame_id", frame_id, "vectornav");
-
   // Serial Port Settings
 	string SensorPort;	
 	int SensorBaudrate;
-	
-	n.param<std::string>("serial_port", SensorPort, "/dev/ttyUSB0");
-	n.param<int>("serial_baud", SensorBaudrate, 115200);
+  const uint32_t DefaultSensorBaudrate = 115200;
+
+  // ROS node init
+  ros::init(argc, argv, "vectornav");
+  ros::NodeHandle n;
+  ros::NodeHandle nh_ns("~");
+
+  pubIMU =  n.advertise<sensor_msgs::Imu>("vectornav/IMU", 1000);
+  pubMag =  n.advertise<sensor_msgs::MagneticField>("vectornav/Mag", 1000);
+  pubGPS =  n.advertise<sensor_msgs::NavSatFix>("vectornav/GPS", 1000);
+  pubTemp = n.advertise<sensor_msgs::Temperature>("vectornav/Temp", 1000);
+  pubPres = n.advertise<sensor_msgs::FluidPressure>("vectornav/Pres", 1000);
+
+  nh_ns.param<std::string>("frame_id", frame_id, "vectornav");
+	nh_ns.param<std::string>("serial_port", SensorPort, "/dev/ttyUSB0");
+	nh_ns.param<int>("serial_baud", SensorBaudrate, 921600);
 	
   ROS_INFO("Connecting to : %s @ %d Baud", SensorPort.c_str(), SensorBaudrate);
 
 	// Create a VnSensor object and connect to sensor
 	VnSensor vs;
-	vs.connect(SensorPort, SensorBaudrate);
+
+	// Has high rate baud been set?
+  vs.connect(SensorPort, SensorBaudrate);
+  try{
+    vs.readModelNumber();
+  }catch(vn::timeout t){
+    // Set high baud rate
+    ROS_INFO("Fast baud not configured, attempting to set");
+    vs.connect(SensorPort,DefaultSensorBaudrate);
+    ROS_INFO("Connected with default baud rate");
+    try{
+      vs.readModelNumber();
+    }catch(vn::timeout t){
+      ROS_INFO("Couldn't set the baud... disconnecting");
+      return -1;
+    }
+    vs.writeSerialBaudRate(SensorBaudrate,true);
+    ROS_INFO("Wrote new baud rate");
+    vs.disconnect();
+    ROS_INFO("Reconnecting... ");
+    vs.connect(SensorPort,SensorBaudrate);
+    try{
+      vs.readModelNumber();
+    }catch(vn::timeout t){
+      ROS_INFO("Couldn't set the baud... disconnecting");
+      return -1;
+    }
+    
+  }
 
 	// Query the sensor's model number.
 	string mn = vs.readModelNumber();	
@@ -83,14 +113,18 @@ int main(int argc, char *argv[])
 
 	// Set Data output Freq [Hz]
 	int async_output_rate;
-	n.param<int>("async_output_rate", async_output_rate, 40);
+	nh_ns.param<int>("async_output_rate", async_output_rate, 200);
+  uint32_t oldHz = vs.readAsyncDataOutputFrequency();
 	vs.writeAsyncDataOutputFrequency(async_output_rate);
+  uint32_t newHz = vs.readAsyncDataOutputFrequency();
+  ROS_INFO("Old Async Frequency: %d Hz", oldHz);
+  ROS_INFO("New Async Frequency: %d Hz", newHz);
   
   
 	// Configure binary output message
 	BinaryOutputRegister bor(
 		ASYNCMODE_PORT1,
-		1000 / async_output_rate,  // update rate [ms]
+		1000 / newHz,  // update rate [ms]
 		COMMONGROUP_TIMESTARTUP | COMMONGROUP_QUATERNION | COMMONGROUP_ANGULARRATE | COMMONGROUP_POSITION | COMMONGROUP_ACCEL | COMMONGROUP_MAGPRES,
 		TIMEGROUP_NONE,
 		IMUGROUP_NONE,
