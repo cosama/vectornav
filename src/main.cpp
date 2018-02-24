@@ -23,7 +23,7 @@
  *
  */
 
-#include <iostream>
+//#include <iostream>
 
 // ROS Libraries
 #include "ros/ros.h"
@@ -104,7 +104,6 @@ int main(int argc, char *argv[])
       ROS_INFO("Couldn't set the baud... disconnecting");
       return -1;
     }
-    
   }
 
 	// Query the sensor's model number.
@@ -124,7 +123,7 @@ int main(int argc, char *argv[])
 	// Configure binary output message
 	BinaryOutputRegister bor(
 		ASYNCMODE_PORT1,
-		1000 / newHz,  // update rate [ms]
+		800 / newHz,  // update rate [ms]
 		COMMONGROUP_TIMESTARTUP | COMMONGROUP_QUATERNION | COMMONGROUP_ANGULARRATE | COMMONGROUP_POSITION | COMMONGROUP_ACCEL | COMMONGROUP_MAGPRES,
 		TIMEGROUP_NONE,
 		IMUGROUP_NONE,
@@ -182,76 +181,88 @@ void BinaryAsyncMessageReceived(void* userData, Packet& p, size_t index)
 
 		
 		// Publish ROS Message
-		
+    ros::Time timestamp =  ros::Time::now(); 
 		// IMU
-		sensor_msgs::Imu msgIMU;
+    if (pubIMU.getNumSubscribers() > 0)
+    {
+		  sensor_msgs::Imu msgIMU;
 		
-		msgIMU.header.stamp = ros::Time::now();
-		msgIMU.header.frame_id = frame_id;
+		  msgIMU.header.stamp = timestamp;
+		  msgIMU.header.frame_id = frame_id;
 		
-		msgIMU.orientation.x = q[0];
-		msgIMU.orientation.y = q[1];
-		msgIMU.orientation.z = q[2];
-		msgIMU.orientation.w = q[3];
+		  msgIMU.orientation.x = q[0];
+		  msgIMU.orientation.y = q[1];
+		  msgIMU.orientation.z = q[2];
+		  msgIMU.orientation.w = q[3];
 		
-		msgIMU.angular_velocity.x = ar[0];
-		msgIMU.angular_velocity.y = ar[1];
-		msgIMU.angular_velocity.z = ar[2];
+		  msgIMU.angular_velocity.x = ar[0];
+		  msgIMU.angular_velocity.y = ar[1];
+		  msgIMU.angular_velocity.z = ar[2];
 		
-		msgIMU.linear_acceleration.x = al[0];
-		msgIMU.linear_acceleration.y = al[1];
-		msgIMU.linear_acceleration.z = al[2];
+		  msgIMU.linear_acceleration.x = al[0];
+		  msgIMU.linear_acceleration.y = al[1];
+		  msgIMU.linear_acceleration.z = al[2];
 		
-    pubIMU.publish(msgIMU);
-
+      pubIMU.publish(msgIMU);
+    }
     
     // Magnetic Field
-    sensor_msgs::MagneticField msgMag;
-    
-    msgMag.header.stamp = msgIMU.header.stamp;
-    msgMag.header.frame_id = msgIMU.header.frame_id;
+    if (pubMag.getNumSubscribers() > 0)
+    {
+      sensor_msgs::MagneticField msgMag;
+      
+      msgMag.header.stamp = timestamp;
+      msgMag.header.frame_id = frame_id;
 
-    msgMag.magnetic_field.x = mag[0];
-    msgMag.magnetic_field.y = mag[1];
-    msgMag.magnetic_field.z = mag[2];
+      msgMag.magnetic_field.x = mag[0];
+      msgMag.magnetic_field.y = mag[1];
+      msgMag.magnetic_field.z = mag[2];
 
-    pubMag.publish(msgMag);
-    
+      pubMag.publish(msgMag);
+    }    
     
     // GPS
-    sensor_msgs::NavSatFix msgGPS;
-    
-    msgGPS.header.stamp = msgIMU.header.stamp;
-    msgGPS.header.frame_id = msgIMU.header.frame_id;
+    if (pubGPS.getNumSubscribers() > 0)
+    {
+      sensor_msgs::NavSatFix msgGPS;
+      
+      msgGPS.header.stamp = timestamp;
+      msgGPS.header.frame_id = frame_id;
 
-    msgGPS.latitude = lla[0];
-    msgGPS.longitude = lla[1];
-    msgGPS.altitude = lla[2];
+      //we should also define the status here
 
-    pubGPS.publish(msgGPS);
-    
+      msgGPS.latitude  = lla[0];
+      msgGPS.longitude = lla[1];
+      msgGPS.altitude  = lla[2];
+
+      pubGPS.publish(msgGPS);
+    }    
     
     // Temperature
-    sensor_msgs::Temperature msgTemp;
-    
-    msgTemp.header.stamp = msgIMU.header.stamp;
-    msgTemp.header.frame_id = msgIMU.header.frame_id;
-    
-    msgTemp.temperature = temp;
-    
-    pubTemp.publish(msgTemp);
-    
+    if (pubTemp.getNumSubscribers() > 0)
+    {
+      sensor_msgs::Temperature msgTemp;
+      
+      msgTemp.header.stamp = timestamp;
+      msgTemp.header.frame_id = frame_id;
+      
+      msgTemp.temperature = temp;
+      
+      pubTemp.publish(msgTemp);
+    }    
     
     // Barometer
-    sensor_msgs::FluidPressure msgPres;
-    
-    msgPres.header.stamp = msgIMU.header.stamp;
-    msgPres.header.frame_id = msgIMU.header.frame_id;
-    
-    msgPres.fluid_pressure = pres;
-    
-    pubPres.publish(msgPres);
-  
+    if (pubPres.getNumSubscribers() > 0)
+    {
+      sensor_msgs::FluidPressure msgPres;
+      
+      msgPres.header.stamp = timestamp;
+      msgPres.header.frame_id = frame_id;
+      
+      msgPres.fluid_pressure = pres;
+      
+      pubPres.publish(msgPres);
+    }  
 	}
 }
 
