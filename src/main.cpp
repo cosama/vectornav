@@ -127,7 +127,7 @@ int main(int argc, char *argv[])
 		COMMONGROUP_TIMESTARTUP | COMMONGROUP_QUATERNION | COMMONGROUP_ANGULARRATE | COMMONGROUP_POSITION | COMMONGROUP_ACCEL | COMMONGROUP_MAGPRES,
 		TIMEGROUP_NONE,
 		IMUGROUP_NONE,
-		GPSGROUP_NONE,
+		GPSGROUP_NUMSATS | GPSGROUP_FIX,
 		ATTITUDEGROUP_NONE,
 		INSGROUP_NONE);
 
@@ -162,7 +162,7 @@ void BinaryAsyncMessageReceived(void* userData, Packet& p, size_t index)
 			COMMONGROUP_TIMESTARTUP | COMMONGROUP_QUATERNION | COMMONGROUP_ANGULARRATE | COMMONGROUP_POSITION | COMMONGROUP_ACCEL | COMMONGROUP_MAGPRES,
 			TIMEGROUP_NONE,
 			IMUGROUP_NONE,
-			GPSGROUP_NONE,
+			GPSGROUP_NUMSATS | GPSGROUP_FIX,
 			ATTITUDEGROUP_NONE,
 			INSGROUP_NONE))
 			// Not the type of binary packet we are expecting.
@@ -178,6 +178,8 @@ void BinaryAsyncMessageReceived(void* userData, Packet& p, size_t index)
 		vec3f mag = p.extractVec3f();
 		float temp = p.extractFloat();
 		float pres = p.extractFloat();
+    uint8_t num_sats = p.extractUint8();
+    uint8_t fix = p.extractUint8();
 
 		
 		// Publish ROS Message
@@ -229,7 +231,11 @@ void BinaryAsyncMessageReceived(void* userData, Packet& p, size_t index)
       msgGPS.header.stamp = timestamp;
       msgGPS.header.frame_id = frame_id;
 
-      //we should also define the status here
+      //vectornav 0: nofix, 1: time only, 2: 2D, 3: 3D
+      //NavSatStatus -1: NO_FIX, 0: FIX, 1: SBAS_fIX, 2: GBAS_FIX
+      //so this roughly reflects this
+      msgGPS.status.status = fix - 1; 
+      msgGPS.status.service = 1; //always gps I think
 
       msgGPS.latitude  = lla[0];
       msgGPS.longitude = lla[1];
