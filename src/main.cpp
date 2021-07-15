@@ -80,6 +80,9 @@ struct UserData {
     boost::array<double, 9ul> linear_accel_covariance = { };
     boost::array<double, 9ul> angular_vel_covariance = { };
     boost::array<double, 9ul> orientation_covariance = { };
+
+    //Request data structure, up to three of them
+    BinaryOutputRegister bor[3];
 };
 
 // Basic loop so we can initilize our covariance parameters above
@@ -130,6 +133,7 @@ int main(int argc, char *argv[])
     string SensorPort;
     int SensorBaudrate;
     int async_output_rate;
+    int imu_output_rate;
 
     // Sensor IMURATE (800Hz by default, used to configure device)
     int SensorImuRate;
@@ -140,6 +144,7 @@ int main(int argc, char *argv[])
     pn.param<bool>("tf_ned_to_enu", user_data.tf_ned_to_enu, false);
     pn.param<bool>("frame_based_enu", user_data.frame_based_enu, false);
     pn.param<int>("async_output_rate", async_output_rate, 40);
+    pn.param<int>("imu_output_rate", imu_output_rate, 100);
     pn.param<std::string>("serial_port", SensorPort, "/dev/ttyUSB0");
     pn.param<int>("serial_baud", SensorBaudrate, 115200);
     pn.param<int>("fixed_imu_rate", SensorImuRate, 800);
@@ -227,7 +232,7 @@ int main(int argc, char *argv[])
     uint32_t sn = vs.readSerialNumber();
     ROS_INFO("Model Number: %s, Firmware Version: %s", mn.c_str(), fv.c_str());
     ROS_INFO("Hardware Revision : %d, Serial Number : %d", hv, sn);
-    ROS_INFO("Publish Rate: %d Hz", async_output_rate);
+    ROS_INFO("Publish Rate: async %d Hz, imu %d Hz", async_output_rate, imu_output_rate);
 
     // Set the device info for passing to the packet callback function
     user_data.device_family = vs.determineDeviceFamily();
@@ -235,8 +240,8 @@ int main(int argc, char *argv[])
     // Make sure no generic async output is registered
     vs.writeAsyncDataOutputType(VNOFF);
 
-    // Configure binary output message
-    BinaryOutputRegister bor(
+    // Configure binary output message for all messages except IMU
+    user_data.bor[0] = BinaryOutputRegister(
             ASYNCMODE_PORT1,
             SensorImuRate / async_output_rate,  // update rate [ms]
             COMMONGROUP_QUATERNION
@@ -262,7 +267,24 @@ int main(int argc, char *argv[])
             | INSGROUP_VELU,
             GPSGROUP_NONE);
 
-    vs.writeBinaryOutput1(bor);
+    // Configure binary output message for IMU messages
+    user_data.bor[1] = BinaryOutputRegister(
+            ASYNCMODE_PORT1,
+            SensorImuRate / imu_output_rate,  // update rate [ms]
+            COMMONGROUP_QUATERNION
+            | COMMONGROUP_ANGULARRATE
+            | COMMONGROUP_ACCEL,
+            TIMEGROUP_NONE,
+            IMUGROUP_NONE,
+            GPSGROUP_NONE,
+            ATTITUDEGROUP_YPRU,  //<-- returning yaw pitch roll uncertainties
+            INSGROUP_NONE,
+            GPSGROUP_NONE);
+
+    vs.writeBinaryOutput1(user_data.bor[0]);
+    vs.writeBinaryOutput2(user_data.bor[1]);
+    //vs.writeBinaryOutput2(user_data.bor[3]); //<-- for later use
+
 
     // Register async callback function
     vs.registerAsyncPacketReceivedHandler(&user_data, BinaryAsyncMessageReceived);
@@ -671,69 +693,90 @@ void fill_ins_message(
     }
 }
 
+// Helper function for checking if package corresponds to a binary output register
+bool isCompatible(Packet& p, BinaryOutputRegister& bor)
+{
+   return p.isCompatible(
+    bor.commonField,
+    bor.timeField,
+    bor.imuField,
+    bor.gpsField,
+    bor.attitudeField,
+    bor.insField,
+    bor.gps2Field); 
+}
+
 //
 // Callback function to process data packet from sensor
 //
 void BinaryAsyncMessageReceived(void* userData, Packet& p, size_t index)
 {
-    vn::sensors::CompositeData cd = vn::sensors::CompositeData::parse(p);
     UserData *user_data = static_cast<UserData*>(userData);
 
     ros::Time time = ros::Time::now();
 
-    // IMU
-    if (pubIMU.getNumSubscribers() > 0)
+    if(isCompatible(p, user_data->bor[1]))
     {
-        sensor_msgs::Imu msgIMU;
-        fill_imu_message(msgIMU, cd, time, user_data);
-        pubIMU.publish(msgIMU);
-    }
+        vn::sensors::CompositeData cd = vn::sensors::CompositeData::parse(p);
 
-    // Magnetic Field
-    if (pubMag.getNumSubscribers() > 0)
-    {
-        sensor_msgs::MagneticField msgMag;
-        fill_mag_message(msgMag, cd, time, user_data);
-        pubMag.publish(msgMag);
+        // IMU
+        if (pubIMU.getNumSubscribers() > 0)
+        {
+            sensor_msgs::Imu msgIMU;
+            fill_imu_message(msgIMU, cd, time, user_data);
+            pubIMU.publish(msgIMU);
+        }
     }
-
-    // Temperature
-    if (pubTemp.getNumSubscribers() > 0)
+    else if(isCompatible(p, user_data->bor[0]))
     {
-        sensor_msgs::Temperature msgTemp;
-        fill_temp_message(msgTemp, cd, time, user_data);
-        pubTemp.publish(msgTemp);
-    }
+        vn::sensors::CompositeData cd = vn::sensors::CompositeData::parse(p);
 
-    // Barometer
-    if (pubPres.getNumSubscribers() > 0)
-    {
-        sensor_msgs::FluidPressure msgPres;
-        fill_pres_message(msgPres, cd, time, user_data);
-        pubPres.publish(msgPres);
-    }
+        // Magnetic Field
+        if (pubMag.getNumSubscribers() > 0)
+        {
+            sensor_msgs::MagneticField msgMag;
+            fill_mag_message(msgMag, cd, time, user_data);
+            pubMag.publish(msgMag);
+        }
 
-    // GPS
-    if (user_data->device_family != VnSensor::Family::VnSensor_Family_Vn100 && pubGPS.getNumSubscribers() > 0)
-    {
-        sensor_msgs::NavSatFix msgGPS;
-        fill_gps_message(msgGPS, cd, time, user_data);
-        pubGPS.publish(msgGPS);
-    }
+        // Temperature
+        if (pubTemp.getNumSubscribers() > 0)
+        {
+            sensor_msgs::Temperature msgTemp;
+            fill_temp_message(msgTemp, cd, time, user_data);
+            pubTemp.publish(msgTemp);
+        }
 
-    // Odometry
-    if (user_data->device_family != VnSensor::Family::VnSensor_Family_Vn100 && pubOdom.getNumSubscribers() > 0)
-    {
-        nav_msgs::Odometry msgOdom;
-        fill_odom_message(msgOdom, cd, time, user_data);
-        pubOdom.publish(msgOdom);
-    }
+        // Barometer
+        if (pubPres.getNumSubscribers() > 0)
+        {
+            sensor_msgs::FluidPressure msgPres;
+            fill_pres_message(msgPres, cd, time, user_data);
+            pubPres.publish(msgPres);
+        }
 
-    // INS
-    if (user_data->device_family != VnSensor::Family::VnSensor_Family_Vn100 && pubIns.getNumSubscribers() > 0)
-    {
-        vectornav::Ins msgINS;
-        fill_ins_message(msgINS, cd, time, user_data);
-        pubIns.publish(msgINS);
+        // GPS
+        if (user_data->device_family != VnSensor::Family::VnSensor_Family_Vn100 && pubGPS.getNumSubscribers() > 0)
+        {
+            sensor_msgs::NavSatFix msgGPS;
+            fill_gps_message(msgGPS, cd, time, user_data);
+            pubGPS.publish(msgGPS);
+        }
+
+        // Odometry
+        if (user_data->device_family != VnSensor::Family::VnSensor_Family_Vn100 && pubOdom.getNumSubscribers() > 0)
+        {
+            nav_msgs::Odometry msgOdom;
+            fill_odom_message(msgOdom, cd, time, user_data);
+            pubOdom.publish(msgOdom);
+        }
+
+        // INS
+        if (user_data->device_family != VnSensor::Family::VnSensor_Family_Vn100 && pubIns.getNumSubscribers() > 0)
+        {
+            vectornav::Ins msgINS;
+            fill_ins_message(msgINS, cd, time, user_data);
+            pubIns.publish(msgINS);
+        }
     }
 }
